@@ -1,0 +1,17 @@
+# Example GitLab CI template
+variables:
+  APP_VERSION: "1.0.0"
+
+build:
+  stage: build
+  image: docker:20.10.16
+  script:
+    - docker build -t app:$APP_VERSION .
+
+test:
+  stage: test
+  image:
+    name: node:16-alpine
+    entrypoint: [""]
+  script:
+    - npm test
