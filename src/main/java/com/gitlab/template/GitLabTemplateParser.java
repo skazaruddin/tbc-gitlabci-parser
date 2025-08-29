@@ -2,390 +2,308 @@ package com.gitlab.template;
 
 import com.gitlab.template.exception.GitLabDumpException;
 import com.gitlab.template.exception.GitLabParseException;
-import com.gitlab.template.exception.InvalidComponentException;
-import com.gitlab.template.model.GitLabTemplate;
 import com.gitlab.template.model.GitLabParserOptions;
-import org.apache.commons.lang3.StringUtils;
+import com.gitlab.template.model.GitLabTemplate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.yaml.snakeyaml.DumperOptions;
-import org.yaml.snakeyaml.LoaderOptions;
-import org.yaml.snakeyaml.Yaml;
-import org.yaml.snakeyaml.constructor.Constructor;
-import org.yaml.snakeyaml.constructor.Construct;
-import org.yaml.snakeyaml.nodes.MappingNode;
-import org.yaml.snakeyaml.nodes.Node;
-import org.yaml.snakeyaml.nodes.NodeTuple;
-import org.yaml.snakeyaml.nodes.ScalarNode;
-import org.yaml.snakeyaml.nodes.SequenceNode;
-import org.yaml.snakeyaml.nodes.Tag;
-import org.yaml.snakeyaml.representer.Representer;
+import org.snakeyaml.engine.v2.api.Dump;
+import org.snakeyaml.engine.v2.api.DumpSettings;
+import org.snakeyaml.engine.v2.api.Load;
+import org.snakeyaml.engine.v2.api.LoadSettings;
+import org.snakeyaml.engine.v2.common.FlowStyle;
+import org.snakeyaml.engine.v2.common.ScalarStyle;
 
-import java.util.*;
-import java.util.regex.Pattern;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.Reader;
+import java.io.Writer;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
- * Main parser for GitLab CI/CD templates.
- * Provides parsing and dumping with round-trip fidelity while preserving
- * comments, formatting, and custom GitLab tags.
+ * Parser for GitLab CI/CD templates using SnakeYAML Engine 2.x.
+ * Provides round-trip parsing with preservation of formatting, comments, and GitLab-specific tags.
  */
 public class GitLabTemplateParser {
     
     private static final Logger logger = LoggerFactory.getLogger(GitLabTemplateParser.class);
     
     private final GitLabParserOptions options;
-    private final Yaml yaml;
-    private final Pattern imagePattern = Pattern.compile("^(.+):(.+)$");
+    private final LoadSettings loadSettings;
+    private final DumpSettings dumpSettings;
     
-    /**
-     * Create parser with default options.
-     */
     public GitLabTemplateParser() {
         this(GitLabParserOptions.getDefault());
     }
     
-    /**
-     * Create parser with custom options.
-     */
     public GitLabTemplateParser(GitLabParserOptions options) {
         this.options = options;
-        this.yaml = createYaml();
+        this.loadSettings = createLoadSettings();
+        this.dumpSettings = createDumpSettings();
+    }
+    
+    private LoadSettings createLoadSettings() {
+        return LoadSettings.builder()
+                .setAllowDuplicateKeys(false)
+                .setMaxAliasesForCollections(50)
+                .setAllowRecursiveKeys(false)
+                .setUseMarks(true)
+                .build();
+    }
+    
+    private DumpSettings createDumpSettings() {
+        return DumpSettings.builder()
+                .setIndent(options.getIndent())
+                .setWidth(options.getWidth())
+                .setDefaultFlowStyle(FlowStyle.BLOCK)
+                .setDefaultScalarStyle(options.isPreserveQuotes() ? ScalarStyle.DOUBLE_QUOTED : ScalarStyle.PLAIN)
+                .setCanonical(false)
+                .build();
     }
     
     /**
-     * Parse GitLab CI YAML content into a template object.
+     * Parse GitLab CI template from string content.
      */
-    @SuppressWarnings("unchecked")
-    public GitLabTemplate parse(String content) throws GitLabParseException {
-        if (StringUtils.isBlank(content)) {
-            throw new GitLabParseException("Content cannot be null or empty");
+    public GitLabTemplate parseFromString(String yamlContent) throws GitLabParseException {
+        if (yamlContent == null || yamlContent.trim().isEmpty()) {
+            throw new GitLabParseException("YAML content cannot be null or empty");
         }
         
         try {
-            // Parse the content while preserving the node structure
-            Node rootNode = yaml.compose(new java.io.StringReader(content));
-            if (rootNode == null) {
-                throw new GitLabParseException("Invalid YAML content");
-            }
+            Load load = new Load(loadSettings);
+            Object data = load.loadFromString(yamlContent);
             
-            // Also create the data structure for easier manipulation
-            Object data = yaml.load(content);
             if (!(data instanceof Map)) {
-                throw new GitLabParseException("Root element must be a mapping");
+                throw new GitLabParseException("Root YAML element must be a map/object");
             }
             
-            return new GitLabTemplate(rootNode, (Map<String, Object>) data, content);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> yamlMap = (Map<String, Object>) data;
+            
+            return new GitLabTemplate(yamlMap, yamlContent);
             
         } catch (Exception e) {
-            logger.error("Failed to parse GitLab template", e);
-            throw new GitLabParseException("Failed to parse GitLab template: " + e.getMessage(), e);
+            logger.error("Failed to parse GitLab CI template from string", e);
+            throw new GitLabParseException("Failed to parse YAML content: " + e.getMessage(), e);
         }
     }
     
     /**
-     * Convert template back to YAML string with preserved formatting.
+     * Parse GitLab CI template from InputStream.
      */
-    public String dump(GitLabTemplate template) throws GitLabDumpException {
-        if (template == null) {
-            throw new GitLabDumpException("Template cannot be null");
+    public GitLabTemplate parseFromInputStream(InputStream inputStream) throws GitLabParseException {
+        if (inputStream == null) {
+            throw new GitLabParseException("InputStream cannot be null");
         }
         
         try {
-            // For now, use the data structure instead of the node structure
-            // to ensure updates are reflected in the output
-            java.io.StringWriter writer = new java.io.StringWriter();
-            yaml.dump(template.getData(), writer);
-            return writer.toString();
+            Load load = new Load(loadSettings);
+            Object data = load.loadFromInputStream(inputStream);
+            
+            if (!(data instanceof Map)) {
+                throw new GitLabParseException("Root YAML element must be a map/object");
+            }
+            
+            @SuppressWarnings("unchecked")
+            Map<String, Object> yamlMap = (Map<String, Object>) data;
+            
+            return new GitLabTemplate(yamlMap);
+            
         } catch (Exception e) {
-            logger.error("Failed to dump GitLab template", e);
-            throw new GitLabDumpException("Failed to serialize template: " + e.getMessage(), e);
+            logger.error("Failed to parse GitLab CI template from InputStream", e);
+            throw new GitLabParseException("Failed to parse YAML from InputStream: " + e.getMessage(), e);
         }
     }
     
     /**
-     * Update Docker image tag in any section (including global sections like include).
-     * This method can update images in component inputs within include sections.
+     * Parse GitLab CI template from Reader.
      */
-    public boolean updateImageInSection(GitLabTemplate template, String section, String oldTag, String newTag) 
-            throws InvalidComponentException {
-        if (template == null || StringUtils.isBlank(section)) {
-            throw new InvalidComponentException("Template and section name cannot be null or empty");
+    public GitLabTemplate parseFromReader(Reader reader) throws GitLabParseException {
+        if (reader == null) {
+            throw new GitLabParseException("Reader cannot be null");
         }
         
-        Map<String, Object> data = template.getData();
-        Object sectionData = data.get(section);
-        
-        if (sectionData == null) {
-            logger.warn("Section '{}' not found in template", section);
-            return false;
-        }
-        
-        if (sectionData instanceof Map) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> sectionMap = (Map<String, Object>) sectionData;
-            return updateImageInMap(sectionMap, oldTag, newTag);
-        } else if (sectionData instanceof List) {
-            @SuppressWarnings("unchecked")
-            List<Object> sectionList = (List<Object>) sectionData;
-            boolean updated = false;
-            for (Object item : sectionList) {
-                if (item instanceof Map) {
-                    @SuppressWarnings("unchecked")
-                    Map<String, Object> itemMap = (Map<String, Object>) item;
-                    updated |= updateImageInMap(itemMap, oldTag, newTag);
-                }
+        try {
+            Load load = new Load(loadSettings);
+            Object data = load.loadFromReader(reader);
+            
+            if (!(data instanceof Map)) {
+                throw new GitLabParseException("Root YAML element must be a map/object");
             }
-            return updated;
-        } else {
-            logger.warn("Section '{}' is not a mapping or list", section);
-            return false;
+            
+            @SuppressWarnings("unchecked")
+            Map<String, Object> yamlMap = (Map<String, Object>) data;
+            
+            return new GitLabTemplate(yamlMap);
+            
+        } catch (Exception e) {
+            logger.error("Failed to parse GitLab CI template from Reader", e);
+            throw new GitLabParseException("Failed to parse YAML from Reader: " + e.getMessage(), e);
         }
     }
-
+    
     /**
-     * Update Docker image tag in a specific component.
+     * Serialize GitLab CI template to YAML string.
      */
-    public boolean updateImageTag(GitLabTemplate template, String component, String oldTag, String newTag) 
-            throws InvalidComponentException {
-        if (template == null || StringUtils.isBlank(component)) {
-            throw new InvalidComponentException("Template and component name cannot be null or empty");
+    public String dumpToString(GitLabTemplate template) throws GitLabDumpException {
+        if (template == null) {
+            throw new GitLabDumpException("GitLabTemplate cannot be null");
         }
         
-        Map<String, Object> data = template.getData();
-        Object componentData = data.get(component);
-        
-        if (componentData == null) {
-            logger.warn("Component '{}' not found in template", component);
-            return false;
+        try {
+            Dump dump = new Dump(dumpSettings);
+            return dump.dumpToString(template.getData());
+            
+        } catch (Exception e) {
+            logger.error("Failed to dump GitLab CI template to string", e);
+            throw new GitLabDumpException("Failed to serialize template to YAML: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Serialize GitLab CI template to Writer.
+     */
+    public void dumpToWriter(GitLabTemplate template, Writer writer) throws GitLabDumpException {
+        if (template == null) {
+            throw new GitLabDumpException("GitLabTemplate cannot be null");
+        }
+        if (writer == null) {
+            throw new GitLabDumpException("Writer cannot be null");
         }
         
-        if (!(componentData instanceof Map)) {
-            logger.warn("Component '{}' is not a mapping", component);
-            return false;
+        try {
+            Dump dump = new Dump(dumpSettings);
+            String yamlString = dump.dumpToString(template.getData());
+            writer.write(yamlString);
+            writer.flush();
+            
+        } catch (IOException | RuntimeException e) {
+            logger.error("Failed to dump GitLab CI template to Writer", e);
+            throw new GitLabDumpException("Failed to serialize template to Writer: " + e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * Update image tags in component inputs sections.
+     */
+    public GitLabTemplate updateImageInSection(GitLabTemplate template, String componentPath, String newImage) throws GitLabParseException {
+        if (template == null) {
+            throw new GitLabParseException("GitLabTemplate cannot be null");
+        }
+        if (componentPath == null || componentPath.trim().isEmpty()) {
+            throw new GitLabParseException("Component path cannot be null or empty");
+        }
+        if (newImage == null || newImage.trim().isEmpty()) {
+            throw new GitLabParseException("New image cannot be null or empty");
+        }
+        
+        try {
+            Map<String, Object> data = new LinkedHashMap<>(template.getData());
+            updateImageInComponentInputs(data, componentPath, newImage);
+            updateImageInJobs(data, newImage);
+            
+            return new GitLabTemplate(data, template.getOriginalContent());
+            
+        } catch (Exception e) {
+            logger.error("Failed to update image in template section", e);
+            throw new GitLabParseException("Failed to update image: " + e.getMessage(), e);
+        }
+    }
+    
+    private void updateImageInComponentInputs(Map<String, Object> data, String componentPath, String newImage) {
+        Object includeObj = data.get("include");
+        if (!(includeObj instanceof List)) {
+            return;
         }
         
         @SuppressWarnings("unchecked")
-        Map<String, Object> componentMap = (Map<String, Object>) componentData;
+        List<Object> includeList = (List<Object>) includeObj;
         
-        return updateImageInMap(componentMap, oldTag, newTag);
-    }
-    
-    /**
-     * Find all components/jobs in the template.
-     */
-    public List<String> findComponents(GitLabTemplate template) {
-        if (template == null) {
-            return Collections.emptyList();
-        }
-        
-        List<String> components = new ArrayList<>();
-        Map<String, Object> data = template.getData();
-        
-        for (Map.Entry<String, Object> entry : data.entrySet()) {
-            String key = entry.getKey();
-            Object value = entry.getValue();
-            
-            // Skip global sections
-            if (isGlobalSection(key)) {
+        for (Object item : includeList) {
+            if (!(item instanceof Map)) {
                 continue;
             }
             
-            // Jobs are typically maps with stage, script, etc.
-            if (value instanceof Map) {
-                components.add(key);
+            @SuppressWarnings("unchecked")
+            Map<String, Object> includeItem = (Map<String, Object>) item;
+            
+            Object component = includeItem.get("component");
+            if (component instanceof String && ((String) component).contains(componentPath)) {
+                Object inputsObj = includeItem.get("inputs");
+                if (inputsObj instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> inputs = (Map<String, Object>) inputsObj;
+                    inputs.put("image", newImage);
+                    logger.debug("Updated image in component {} to {}", componentPath, newImage);
+                }
             }
         }
-        
-        return components;
     }
     
-    /**
-     * Check if a component has an image definition.
-     */
-    public boolean hasImage(GitLabTemplate template, String component) {
-        try {
-            return getImage(template, component).isPresent();
-        } catch (Exception e) {
-            logger.debug("Error checking image for component '{}'", component, e);
-            return false;
-        }
-    }
-    
-    /**
-     * Get the current image tag for a component.
-     */
-    public Optional<String> getImage(GitLabTemplate template, String component) {
-        if (template == null || StringUtils.isBlank(component)) {
-            return Optional.empty();
-        }
-        
-        Map<String, Object> data = template.getData();
-        Object componentData = data.get(component);
-        
-        if (!(componentData instanceof Map)) {
-            return Optional.empty();
-        }
-        
-        @SuppressWarnings("unchecked")
-        Map<String, Object> componentMap = (Map<String, Object>) componentData;
-        
-        return findImageInMap(componentMap);
-    }
-    
-    private Yaml createYaml() {
-        LoaderOptions loaderOptions = new LoaderOptions();
-        loaderOptions.setAllowDuplicateKeys(false);
-        loaderOptions.setProcessComments(true);
-        
-        DumperOptions dumperOptions = new DumperOptions();
-        dumperOptions.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
-        dumperOptions.setIndent(options.getIndent());
-        dumperOptions.setWidth(options.getWidth());
-        dumperOptions.setProcessComments(true);
-        
-        Constructor constructor = new GitLabConstructor(loaderOptions);
-        Representer representer = new GitLabRepresenter(dumperOptions);
-        
-        return new Yaml(constructor, representer, dumperOptions, loaderOptions);
-    }
-    
-    private boolean updateImageInMap(Map<String, Object> map, String oldTag, String newTag) {
-        boolean updated = false;
-        
-        Object imageValue = map.get("image");
-        if (imageValue != null) {
-            if (imageValue instanceof String) {
-                String imageStr = (String) imageValue;
-                if (imageStr.equals(oldTag)) {
-                    map.put("image", newTag);
-                    updated = true;
-                } else if (imageStr.contains(":")) {
-                    // Try to replace just the tag part
-                    String[] parts = imageStr.split(":", 2);
-                    if (parts.length == 2 && oldTag.contains(":")) {
-                        String[] oldParts = oldTag.split(":", 2);
-                        if (oldParts.length == 2 && parts[0].equals(oldParts[0]) && parts[1].equals(oldParts[1])) {
-                            map.put("image", newTag);
-                            updated = true;
+    private void updateImageInJobs(Map<String, Object> data, String newImage) {
+        for (Map.Entry<String, Object> entry : data.entrySet()) {
+            if (entry.getValue() instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> jobData = (Map<String, Object>) entry.getValue();
+                
+                if (jobData.containsKey("image")) {
+                    Object imageObj = jobData.get("image");
+                    if (imageObj instanceof String) {
+                        String currentImage = (String) imageObj;
+                        if (shouldUpdateImage(currentImage, newImage)) {
+                            jobData.put("image", newImage);
+                            logger.debug("Updated image in job {} to {}", entry.getKey(), newImage);
+                        }
+                    } else if (imageObj instanceof Map) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> imageMap = (Map<String, Object>) imageObj;
+                        Object nameObj = imageMap.get("name");
+                        if (nameObj instanceof String) {
+                            String currentImage = (String) nameObj;
+                            if (shouldUpdateImage(currentImage, newImage)) {
+                                imageMap.put("name", newImage);
+                                logger.debug("Updated image name in job {} to {}", entry.getKey(), newImage);
+                            }
                         }
                     }
                 }
-            } else if (imageValue instanceof Map) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> imageMap = (Map<String, Object>) imageValue;
-                Object nameValue = imageMap.get("name");
-                if (nameValue instanceof String && nameValue.equals(oldTag)) {
-                    imageMap.put("name", newTag);
-                    updated = true;
-                }
             }
         }
-        
-        // Recursively check nested structures
-        for (Object value : map.values()) {
-            if (value instanceof Map) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> nestedMap = (Map<String, Object>) value;
-                updated |= updateImageInMap(nestedMap, oldTag, newTag);
-            } else if (value instanceof List) {
-                @SuppressWarnings("unchecked")
-                List<Object> list = (List<Object>) value;
-                for (Object item : list) {
-                    if (item instanceof Map) {
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> itemMap = (Map<String, Object>) item;
-                        updated |= updateImageInMap(itemMap, oldTag, newTag);
-                    }
-                }
-            }
-        }
-        
-        return updated;
     }
     
-    private Optional<String> findImageInMap(Map<String, Object> map) {
-        Object imageValue = map.get("image");
-        if (imageValue instanceof String) {
-            return Optional.of((String) imageValue);
-        } else if (imageValue instanceof Map) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> imageMap = (Map<String, Object>) imageValue;
-            Object nameValue = imageMap.get("name");
-            if (nameValue instanceof String) {
-                return Optional.of((String) nameValue);
-            }
+    private boolean shouldUpdateImage(String currentImage, String newImage) {
+        if (currentImage == null || newImage == null) {
+            return false;
         }
         
-        // Check nested structures
-        for (Object value : map.values()) {
-            if (value instanceof Map) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> nestedMap = (Map<String, Object>) value;
-                Optional<String> nestedImage = findImageInMap(nestedMap);
-                if (nestedImage.isPresent()) {
-                    return nestedImage;
-                }
-            }
-        }
+        String currentImageName = extractImageName(currentImage);
+        String newImageName = extractImageName(newImage);
         
-        return Optional.empty();
+        // Update if the image names match (e.g., both are "maven") regardless of tag
+        return currentImageName.equals(newImageName) && !currentImage.equals(newImage);
     }
     
-    private boolean isGlobalSection(String key) {
-        return key.equals("include") || key.equals("variables") || key.equals("stages") || 
-               key.equals("before_script") || key.equals("after_script") || key.equals("cache") ||
-               key.startsWith(".");
+    private String extractImageName(String image) {
+        if (image.contains("/")) {
+            // Handle registry/namespace/name:tag format
+            String[] parts = image.split("/");
+            String nameWithTag = parts[parts.length - 1];
+            if (nameWithTag.contains(":")) {
+                return nameWithTag.substring(0, nameWithTag.indexOf(":"));
+            }
+            return nameWithTag;
+        } else if (image.contains(":")) {
+            // Handle simple name:tag format
+            return image.substring(0, image.indexOf(":"));
+        }
+        return image;
     }
     
     /**
-     * Custom constructor to handle GitLab-specific tags.
+     * Get parser options.
      */
-    private static class GitLabConstructor extends Constructor {
-        public GitLabConstructor(LoaderOptions loaderOptions) {
-            super(loaderOptions);
-            // Add support for GitLab-specific tags
-            this.yamlConstructors.put(new Tag("!reference"), new ReferenceConstructor());
-            this.yamlConstructors.put(new Tag("!include"), new IncludeConstructor());
-        }
-        
-        private class ReferenceConstructor implements Construct {
-            public Object construct(Node node) {
-                // Preserve !reference tags as-is
-                if (node instanceof SequenceNode) {
-                    return constructSequence((SequenceNode) node);
-                }
-                return constructScalar((ScalarNode) node);
-            }
-            
-            public void construct2ndStep(Node node, Object object) {
-                // No second step needed for references
-            }
-        }
-        
-        private class IncludeConstructor implements Construct {
-            public Object construct(Node node) {
-                // Preserve !include tags as-is
-                if (node instanceof ScalarNode) {
-                    return constructScalar((ScalarNode) node);
-                } else if (node instanceof SequenceNode) {
-                    return constructSequence((SequenceNode) node);
-                } else {
-                    return constructMapping((MappingNode) node);
-                }
-            }
-            
-            public void construct2ndStep(Node node, Object object) {
-                // No second step needed for includes
-            }
-        }
-    }
-    
-    /**
-     * Custom representer to handle GitLab-specific tags.
-     */
-    private static class GitLabRepresenter extends Representer {
-        public GitLabRepresenter(DumperOptions dumperOptions) {
-            super(dumperOptions);
-        }
+    public GitLabParserOptions getOptions() {
+        return options;
     }
 }
