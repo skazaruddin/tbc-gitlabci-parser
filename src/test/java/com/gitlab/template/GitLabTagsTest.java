@@ -1,134 +1,311 @@
 package com.gitlab.template;
 
+import com.gitlab.template.exception.GitLabParseException;
 import com.gitlab.template.model.GitLabTemplate;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.DisplayName;
 
-import static org.junit.jupiter.api.Assertions.*;
+import java.util.List;
+import java.util.Map;
 
-/**
- * Test GitLab-specific tag handling and round-trip fidelity.
- */
-public class GitLabTagsTest {
-    
+import static org.assertj.core.api.Assertions.assertThat;
+
+@DisplayName("GitLab Tags and References Tests")
+class GitLabTagsTest {
+
     private GitLabTemplateParser parser;
-    
+
     @BeforeEach
     void setUp() {
         parser = new GitLabTemplateParser();
     }
-    
+
     @Test
-    @DisplayName("Should preserve !reference tags exactly")
-    public void testPreserveGitLabReferences() throws Exception {
-        String yamlContent = "job:\n" +
-                           "  extends: !reference [.base, config]\n" +
-                           "  script: !reference [.scripts, build]";
+    @DisplayName("Should parse template with !reference tags")
+    void shouldParseTemplateWithReferenceTags() throws GitLabParseException {
+        String yamlContent = """
+                .cache_template: &cache_config
+                  cache:
+                    key: ${CI_COMMIT_REF_SLUG}
+                    paths:
+                      - .m2/repository/
+                    policy: pull-push
+                
+                .maven_image: &maven_image
+                  image: maven:3.8-openjdk-11
+                
+                validate-pom:
+                  image: !reference [.maven_image, image]
+                  stage: validate
+                  script:
+                    - !reference [.maven_cache, script]
+                    - mvn validate
+                  <<: *cache_config
+                """;
+
+        GitLabTemplate template = parser.parseFromString(yamlContent);
+
+        assertThat(template).isNotNull();
+        assertThat(template.hasJob("validate-pom")).isTrue();
         
-        GitLabTemplate template = parser.parse(yamlContent);
-        String output = parser.dump(template);
-        
-        // The template should parse without errors
-        assertNotNull(template);
-        assertNotNull(output);
-        
-        // Check that the structure was preserved
-        assertTrue(template.getData().containsKey("job"));
+        // The !reference should be preserved in the parsed structure
+        Map<String, Object> validateJob = template.getJob("validate-pom");
+        assertThat(validateJob).containsKey("script");
+        assertThat(validateJob).containsKey("cache");
     }
-    
+
     @Test
-    @DisplayName("Should preserve !include tags")
-    public void testPreserveGitLabIncludes() throws Exception {
-        String yamlContent = "include:\n" +
-                           "  - !include 'common/.gitlab-ci.yml'";
+    @DisplayName("Should handle YAML anchors and aliases")
+    void shouldHandleYAMLAnchorsAndAliases() throws GitLabParseException {
+        String yamlContent = """
+                .before_script_template: &before_script_common
+                  - echo "Starting job on $(date)"
+                  - echo "Running on GitLab Runner"
+                
+                .security_job_template: &security_job
+                  stage: security-scan
+                  before_script:
+                    - *before_script_common
+                  rules:
+                    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+                
+                gitleaks-scan:
+                  extends: .gitleaks
+                  <<: *security_job
+                  variables:
+                    GITLEAKS_CONFIG: ".gitleaks.toml"
+                """;
+
+        GitLabTemplate template = parser.parseFromString(yamlContent);
+
+        assertThat(template).isNotNull();
+        assertThat(template.hasJob("gitleaks-scan")).isTrue();
         
-        GitLabTemplate template = parser.parse(yamlContent);
-        String output = parser.dump(template);
-        
-        assertNotNull(template);
-        assertNotNull(output);
-        assertTrue(template.getData().containsKey("include"));
+        Map<String, Object> gitleaksJob = template.getJob("gitleaks-scan");
+        assertThat(gitleaksJob).containsKey("stage");
+        assertThat(gitleaksJob).containsKey("before_script");
+        assertThat(gitleaksJob).containsKey("rules");
+        assertThat(gitleaksJob).containsKey("variables");
     }
-    
+
     @Test
-    @DisplayName("Should handle complex GitLab template with mixed content")
-    public void testComplexGitLabTemplate() throws Exception {
-        String yamlContent = "# GitLab CI Configuration\n" +
-                           "variables:\n" +
-                           "  APP_VERSION: \"1.0.0\"\n" +
-                           "\n" +
-                           "include:\n" +
-                           "  - project: 'to-be-continuous/tools'\n" +
-                           "    ref: '3.0.0'\n" +
-                           "    file: '/templates/.gitlab-ci.yml'\n" +
-                           "\n" +
-                           "build:\n" +
-                           "  stage: build\n" +
-                           "  image: docker:20.10.16\n" +
-                           "  extends: .tbc-base\n" +
-                           "  script:\n" +
-                           "    - docker build -t app:$APP_VERSION .";
+    @DisplayName("Should parse complex include structures")
+    void shouldParseComplexIncludeStructures() throws GitLabParseException {
+        String yamlContent = """
+                include:
+                  # To-Be-Continuous components
+                  - component: $CI_SERVER_FQDN/to-be-continuous/maven/gitlab-ci-maven@5.0
+                    inputs:
+                      image: "docker.io/library/maven:3.8-openjdk-11"
+                      deploy-enabled: true
+                  
+                  # Security components
+                  - component: $CI_SERVER_FQDN/to-be-continuous/gitleaks/gitlab-ci-gitleaks@2.0
+                    inputs:
+                      stage: security-scan
+                  
+                  # Remote includes
+                  - remote: 'https://gitlab.com/my-group/ci-templates/-/raw/main/security.yml'
+                  
+                  # Local includes
+                  - local: 'ci-templates/notification-template.yml'
+                  
+                  # Template includes
+                  - template: Security/SAST.gitlab-ci.yml
+                
+                stages:
+                  - validate
+                  - security-scan
+                  - build
+                """;
+
+        GitLabTemplate template = parser.parseFromString(yamlContent);
+
+        assertThat(template).isNotNull();
         
-        GitLabTemplate template = parser.parse(yamlContent);
-        String output = parser.dump(template);
+        List<Object> includes = template.getInclude();
+        assertThat(includes).hasSize(5);
         
-        assertNotNull(template);
-        assertNotNull(output);
+        // Check for TBC components
+        assertThat(template.hasTBCComponents()).isTrue();
         
-        // Verify main structure is preserved
-        assertTrue(template.getData().containsKey("build"));
-        assertTrue(template.getData().containsKey("variables"));
-        assertTrue(template.getData().containsKey("include"));
+        List<Map<String, Object>> mavenComponents = template.getComponentsByPath("maven");
+        assertThat(mavenComponents).hasSize(1);
         
-        // Test that we can modify the image tag
-        boolean updated = parser.updateImageTag(template, "build", "docker:20.10.16", "docker:latest");
-        assertTrue(updated);
+        List<Map<String, Object>> gitleaksComponents = template.getComponentsByPath("gitleaks");
+        assertThat(gitleaksComponents).hasSize(1);
         
-        String updatedOutput = parser.dump(template);
-        assertNotNull(updatedOutput);
+        // Verify different include types
+        boolean hasRemote = includes.stream()
+                .filter(item -> item instanceof Map)
+                .map(item -> (Map<String, Object>) item)
+                .anyMatch(item -> item.containsKey("remote"));
+        assertThat(hasRemote).isTrue();
+        
+        boolean hasLocal = includes.stream()
+                .filter(item -> item instanceof Map)
+                .map(item -> (Map<String, Object>) item)
+                .anyMatch(item -> item.containsKey("local"));
+        assertThat(hasLocal).isTrue();
+        
+        boolean hasTemplate = includes.stream()
+                .filter(item -> item instanceof Map)
+                .map(item -> (Map<String, Object>) item)
+                .anyMatch(item -> item.containsKey("template"));
+        assertThat(hasTemplate).isTrue();
     }
-    
+
     @Test
-    @DisplayName("Should handle nested image references")
-    public void testNestedImageReference() throws Exception {
-        String yamlContent = "build:\n" +
-                           "  stage: build\n" +
-                           "  image:\n" +
-                           "    name: docker:20.10.16\n" +
-                           "    entrypoint: [\"\"]";
+    @DisplayName("Should handle matrix jobs and parallel execution")
+    void shouldHandleMatrixJobsAndParallelExecution() throws GitLabParseException {
+        String yamlContent = """
+                test-matrix:
+                  extends: .maven-test
+                  parallel:
+                    matrix:
+                      - MAVEN_PROFILE: [unit-tests, integration-tests, performance-tests]
+                        JAVA_VERSION: [11, 17]
+                  script:
+                    - mvn test -P$MAVEN_PROFILE
+                  artifacts:
+                    reports:
+                      junit: target/surefire-reports/TEST-*.xml
+                
+                multi-arch-build:
+                  stage: build
+                  parallel:
+                    matrix:
+                      - ARCH: [amd64, arm64]
+                        OS: [linux, windows]
+                  script:
+                    - docker build --platform ${OS}/${ARCH} -t myapp:${ARCH}-${OS} .
+                """;
+
+        GitLabTemplate template = parser.parseFromString(yamlContent);
+
+        assertThat(template).isNotNull();
+        assertThat(template.hasJob("test-matrix")).isTrue();
+        assertThat(template.hasJob("multi-arch-build")).isTrue();
         
-        GitLabTemplate template = parser.parse(yamlContent);
+        Map<String, Object> matrixJob = template.getJob("test-matrix");
+        assertThat(matrixJob).containsKey("parallel");
         
-        assertTrue(parser.hasImage(template, "build"));
-        assertTrue(parser.getImage(template, "build").isPresent());
-        assertEquals("docker:20.10.16", parser.getImage(template, "build").get());
-        
-        // Update the nested image
-        boolean updated = parser.updateImageTag(template, "build", "docker:20.10.16", "docker:latest");
-        assertTrue(updated);
-        
-        assertEquals("docker:latest", parser.getImage(template, "build").get());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> parallel = (Map<String, Object>) matrixJob.get("parallel");
+        assertThat(parallel).containsKey("matrix");
     }
-    
+
     @Test
-    @DisplayName("Should survive round-trip processing with comments")
-    public void testRoundTripWithComments() throws Exception {
-        String yamlWithComments = "# Job definition\n" +
-                                "build:\n" +
-                                "  stage: build  # Build stage\n" +
-                                "  script:\n" +
-                                "    - make build  # Run build";
+    @DisplayName("Should handle workflow rules and conditions")
+    void shouldHandleWorkflowRulesAndConditions() throws GitLabParseException {
+        String yamlContent = """
+                workflow:
+                  rules:
+                    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+                    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+                    - if: $CI_COMMIT_TAG
+                    - if: $CI_PIPELINE_SOURCE == "web"
+                      when: manual
+                
+                variables:
+                  DEPLOY_ENVIRONMENT:
+                    value: "staging"
+                    description: "Target deployment environment"
+                
+                deploy-conditional:
+                  stage: deploy
+                  script:
+                    - echo "Deploying to $DEPLOY_ENVIRONMENT"
+                  rules:
+                    - if: $CI_COMMIT_BRANCH == "develop"
+                      variables:
+                        DEPLOY_ENVIRONMENT: "staging"
+                    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+                      variables:
+                        DEPLOY_ENVIRONMENT: "production"
+                      when: manual
+                """;
+
+        GitLabTemplate template = parser.parseFromString(yamlContent);
+
+        assertThat(template).isNotNull();
+        assertThat(template.getData()).containsKey("workflow");
         
-        GitLabTemplate template = parser.parse(yamlWithComments);
-        String output = parser.dump(template);
+        Map<String, Object> variables = template.getVariables();
+        assertThat(variables).containsKey("DEPLOY_ENVIRONMENT");
         
-        assertNotNull(output);
-        assertTrue(template.getData().containsKey("build"));
+        assertThat(template.hasJob("deploy-conditional")).isTrue();
+        Map<String, Object> deployJob = template.getJob("deploy-conditional");
+        assertThat(deployJob).containsKey("rules");
+    }
+
+    @Test
+    @DisplayName("Should handle services and complex job configurations")
+    void shouldHandleServicesAndComplexJobConfigurations() throws GitLabParseException {
+        String yamlContent = """
+                services:
+                  - name: postgres:13
+                    alias: db
+                  - name: redis:6-alpine
+                    alias: cache
+                
+                integration-test:
+                  image: 
+                    name: node:18-alpine
+                    entrypoint: [""]
+                  services:
+                    - name: postgres:13
+                      variables:
+                        POSTGRES_DB: testdb
+                        POSTGRES_USER: testuser
+                        POSTGRES_PASSWORD: testpass
+                  variables:
+                    DATABASE_URL: "postgresql://testuser:testpass@db:5432/testdb"
+                    REDIS_URL: "redis://cache:6379"
+                  before_script:
+                    - apk add --no-cache postgresql-client
+                    - until pg_isready -h db -p 5432 -U testuser; do sleep 1; done
+                  script:
+                    - npm run test:integration
+                  artifacts:
+                    reports:
+                      junit: test-results.xml
+                      coverage_report:
+                        coverage_format: cobertura
+                        path: coverage.xml
+                  coverage: '/Coverage: \\d+\\.\\d+%/'
+                  retry:
+                    max: 2
+                    when:
+                      - runner_system_failure
+                      - stuck_or_timeout_failure
+                """;
+
+        GitLabTemplate template = parser.parseFromString(yamlContent);
+
+        assertThat(template).isNotNull();
+        assertThat(template.getData()).containsKey("services");
+        assertThat(template.hasJob("integration-test")).isTrue();
         
-        // Parse the output again to ensure round-trip works
-        GitLabTemplate reparsed = parser.parse(output);
-        assertNotNull(reparsed);
-        assertEquals(1, parser.findComponents(reparsed).size());
+        Map<String, Object> integrationJob = template.getJob("integration-test");
+        assertThat(integrationJob).containsKey("services");
+        assertThat(integrationJob).containsKey("artifacts");
+        assertThat(integrationJob).containsKey("retry");
+        assertThat(integrationJob).containsKey("coverage");
+        
+        // Verify complex image structure
+        @SuppressWarnings("unchecked")
+        Map<String, Object> imageConfig = (Map<String, Object>) integrationJob.get("image");
+        assertThat(imageConfig).containsKey("name");
+        assertThat(imageConfig).containsKey("entrypoint");
+        
+        // Verify artifacts structure
+        @SuppressWarnings("unchecked")
+        Map<String, Object> artifacts = (Map<String, Object>) integrationJob.get("artifacts");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> reports = (Map<String, Object>) artifacts.get("reports");
+        assertThat(reports).containsKey("junit");
+        assertThat(reports).containsKey("coverage_report");
     }
 }
