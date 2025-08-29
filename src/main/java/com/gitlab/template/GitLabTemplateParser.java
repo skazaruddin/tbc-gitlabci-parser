@@ -91,9 +91,10 @@ public class GitLabTemplateParser {
         }
         
         try {
-            // Use the preserved node structure for round-trip fidelity
+            // For now, use the data structure instead of the node structure
+            // to ensure updates are reflected in the output
             java.io.StringWriter writer = new java.io.StringWriter();
-            yaml.serialize(template.getRootNode(), writer);
+            yaml.dump(template.getData(), writer);
             return writer.toString();
         } catch (Exception e) {
             logger.error("Failed to dump GitLab template", e);
@@ -101,6 +102,46 @@ public class GitLabTemplateParser {
         }
     }
     
+    /**
+     * Update Docker image tag in any section (including global sections like include).
+     * This method can update images in component inputs within include sections.
+     */
+    public boolean updateImageInSection(GitLabTemplate template, String section, String oldTag, String newTag) 
+            throws InvalidComponentException {
+        if (template == null || StringUtils.isBlank(section)) {
+            throw new InvalidComponentException("Template and section name cannot be null or empty");
+        }
+        
+        Map<String, Object> data = template.getData();
+        Object sectionData = data.get(section);
+        
+        if (sectionData == null) {
+            logger.warn("Section '{}' not found in template", section);
+            return false;
+        }
+        
+        if (sectionData instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> sectionMap = (Map<String, Object>) sectionData;
+            return updateImageInMap(sectionMap, oldTag, newTag);
+        } else if (sectionData instanceof List) {
+            @SuppressWarnings("unchecked")
+            List<Object> sectionList = (List<Object>) sectionData;
+            boolean updated = false;
+            for (Object item : sectionList) {
+                if (item instanceof Map) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> itemMap = (Map<String, Object>) item;
+                    updated |= updateImageInMap(itemMap, oldTag, newTag);
+                }
+            }
+            return updated;
+        } else {
+            logger.warn("Section '{}' is not a mapping or list", section);
+            return false;
+        }
+    }
+
     /**
      * Update Docker image tag in a specific component.
      */
