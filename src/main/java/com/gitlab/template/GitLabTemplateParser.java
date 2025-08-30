@@ -71,7 +71,8 @@ public class GitLabTemplateParser {
         }
         
         try {
-            Load load = new Load(loadSettings);
+            GitLabYamlConstructor constructor = new GitLabYamlConstructor(loadSettings);
+            Load load = new Load(loadSettings, constructor);
             Object data = load.loadFromString(yamlContent);
             
             if (!(data instanceof Map)) {
@@ -98,7 +99,8 @@ public class GitLabTemplateParser {
         }
         
         try {
-            Load load = new Load(loadSettings);
+            GitLabYamlConstructor constructor = new GitLabYamlConstructor(loadSettings);
+            Load load = new Load(loadSettings, constructor);
             Object data = load.loadFromInputStream(inputStream);
             
             if (!(data instanceof Map)) {
@@ -125,7 +127,8 @@ public class GitLabTemplateParser {
         }
         
         try {
-            Load load = new Load(loadSettings);
+            GitLabYamlConstructor constructor = new GitLabYamlConstructor(loadSettings);
+            Load load = new Load(loadSettings, constructor);
             Object data = load.loadFromReader(reader);
             
             if (!(data instanceof Map)) {
