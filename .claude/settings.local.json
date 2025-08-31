@@ -4,7 +4,8 @@
       "WebSearch",
       "Bash(mvn clean:*)",
       "Bash(mvn test:*)",
-      "Bash(mvn:*)"
+      "Bash(mvn:*)",
+      "Bash(python3:*)"
     ],
     "deny": [],
     "ask": []

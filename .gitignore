@@ -31,3 +31,8 @@ Thumbs.db
 # Temporary demo files
 Demo.java
 Demo.class
+
+
+venv
+python/__pycache__/
+python/*.pyc
