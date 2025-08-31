@@ -1,0 +1,40 @@
+type: specs.openrewrite.org/v1beta/recipe
+name: com.gitlab.template.openrewrite.UpdateGitLabImageTags
+displayName: Update GitLab CI image tags
+description: Updates Docker image tags in GitLab CI templates using GitLab Template Parser
+tags:
+  - gitlab-ci
+  - docker
+  - image-tags
+recipeList:
+  - com.gitlab.template.openrewrite.UpdateGitLabImageTags
+
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: com.gitlab.template.openrewrite.UpdateMavenToJava17
+displayName: Update Maven images to Java 17
+description: Updates all Maven Docker images from Java 11 to Java 17 in GitLab CI templates
+tags:
+  - gitlab-ci
+  - maven
+  - java-17
+recipeList:
+  - com.gitlab.template.openrewrite.UpdateGitLabImageTags:
+      componentPath: maven
+      newImage: maven:3.8-openjdk-17
+      filePattern: "**/.gitlab-ci.yml"
+
+---
+type: specs.openrewrite.org/v1beta/recipe
+name: com.gitlab.template.openrewrite.UpdateSonarQubeToLatest
+displayName: Update SonarQube to latest
+description: Updates SonarQube Docker images to latest version in GitLab CI templates
+tags:
+  - gitlab-ci
+  - sonarqube
+  - latest
+recipeList:
+  - com.gitlab.template.openrewrite.UpdateGitLabImageTags:
+      componentPath: sonarqube
+      newImage: sonarqube:latest
+      filePattern: "**/.gitlab-ci.yml"

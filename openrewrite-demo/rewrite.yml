@@ -1,0 +1,56 @@
+# OpenRewrite plaintext recipe configuration for GitLab CI image updates
+# Usage: mvn rewrite:run -Drewrite.configLocation=rewrite.yml
+
+type: specs.openrewrite.org/v1beta/recipe
+name: com.gitlab.template.recipes.GitLabImageUpgrade
+displayName: GitLab CI Image Upgrade Suite
+description: Comprehensive recipe suite for upgrading Docker images in GitLab CI templates
+tags:
+  - gitlab-ci
+  - docker-images
+  - java-upgrade
+
+recipeList:
+  # Update Maven from Java 11 to Java 17
+  - com.gitlab.template.openrewrite.UpdateGitLabImageTags:
+      componentPath: maven
+      newImage: maven:3.8-openjdk-17
+      filePattern: "**/.gitlab-ci.yml"
+  
+  # Update SonarQube to latest
+  - com.gitlab.template.openrewrite.UpdateGitLabImageTags:
+      componentPath: sonarqube  
+      newImage: sonarqube:latest
+      filePattern: "**/.gitlab-ci.yml"
+
+---
+# Individual recipe for Maven upgrade only
+type: specs.openrewrite.org/v1beta/recipe
+name: com.gitlab.template.recipes.MavenJava17Upgrade
+displayName: Maven Java 17 Upgrade
+description: Updates Maven Docker images from Java 11 to Java 17
+tags:
+  - maven
+  - java-17
+
+recipeList:
+  - com.gitlab.template.openrewrite.UpdateGitLabImageTags:
+      componentPath: maven
+      newImage: maven:3.8-openjdk-17
+      filePattern: "**/.gitlab-ci.yml"
+
+---
+# Individual recipe for SonarQube upgrade only  
+type: specs.openrewrite.org/v1beta/recipe
+name: com.gitlab.template.recipes.SonarQubeLatestUpgrade
+displayName: SonarQube Latest Upgrade
+description: Updates SonarQube Docker images to latest version
+tags:
+  - sonarqube
+  - latest
+
+recipeList:
+  - com.gitlab.template.openrewrite.UpdateGitLabImageTags:
+      componentPath: sonarqube
+      newImage: sonarqube:latest
+      filePattern: "**/.gitlab-ci.yml"

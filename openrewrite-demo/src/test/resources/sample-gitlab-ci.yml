@@ -1,0 +1,89 @@
+# Sample GitLab CI configuration for testing OpenRewrite recipe
+.maven_image: &maven_image
+  image: maven:3.8-openjdk-11
+
+.security_job_template: &security_job
+  stage: security-scan
+  before_script:
+    - echo "Starting security scan"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+include:
+  # To-Be-Continuous components
+  - component: $CI_SERVER_FQDN/to-be-continuous/maven/gitlab-ci-maven@5.0
+    inputs:
+      image: "docker.io/library/maven:3.8-openjdk-11"
+      deploy-enabled: true
+  
+  # Security components
+  - component: $CI_SERVER_FQDN/to-be-continuous/gitleaks/gitlab-ci-gitleaks@2.0
+    inputs:
+      stage: security-scan
+  
+  # SonarQube component
+  - component: $CI_SERVER_FQDN/to-be-continuous/sonarqube/gitlab-ci-sonarqube@3.0
+    inputs:
+      image: "sonarqube:9.9-community"
+      stage: code-quality
+
+stages:
+  - validate
+  - security-scan
+  - code-quality
+  - test
+  - build
+  - deploy
+
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository"
+  MAVEN_CLI_OPTS: "--batch-mode --errors --fail-at-end --show-version"
+
+validate-pom:
+  stage: validate
+  script:
+    - echo "Running validation"
+    - mvn validate $MAVEN_CLI_OPTS
+  <<: *maven_image
+
+test-unit:
+  stage: test
+  image: maven:3.8-openjdk-11
+  script:
+    - mvn test $MAVEN_CLI_OPTS
+  artifacts:
+    reports:
+      junit: target/surefire-reports/TEST-*.xml
+
+test-integration:
+  stage: test
+  image:
+    name: maven:3.8-openjdk-11
+    entrypoint: [""]
+  services:
+    - name: postgres:13
+      variables:
+        POSTGRES_DB: testdb
+  script:
+    - mvn verify $MAVEN_CLI_OPTS
+  artifacts:
+    reports:
+      junit: target/failsafe-reports/TEST-*.xml
+
+gitleaks-scan:
+  extends: .gitleaks
+  <<: *security_job
+  variables:
+    GITLEAKS_CONFIG: ".gitleaks.toml"
+
+deploy-staging:
+  stage: deploy
+  image: maven:3.8-openjdk-11
+  script:
+    - echo "Deploying to staging"
+    - mvn deploy $MAVEN_CLI_OPTS
+  environment:
+    name: staging
+    url: https://staging.example.com
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
