@@ -151,6 +151,18 @@ class GitLabTemplate:
 
 
 class GitLabTemplateParser:
+    def apply_changes_to_file(self, file_path: str, transform_fn=None):
+        """
+        Read a GitLab CI YAML file, apply changes, and write back to the file.
+        By default, applies apply_java21_upgrade. You can pass a custom transform_fn.
+        """
+        template = self.parse_from_file(file_path)
+        if transform_fn is None:
+            transform_fn = self.apply_java21_upgrade
+        updated_template = transform_fn(template)
+        updated_yaml = self.dump_to_string(updated_template)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(updated_yaml)
     """Parser for GitLab CI/CD templates using PyYAML with custom constructors."""
     
     def __init__(self, options: Optional[GitLabParserOptions] = None):
@@ -281,3 +293,36 @@ class GitLabTemplateParser:
     def get_options(self) -> GitLabParserOptions:
         """Get parser options."""
         return self.options
+
+    def apply_java21_upgrade(self, file_path: str):
+        """
+        Upgrade Maven component and jobs to use Java 21, and update Sonar scanner CLI image in a GitLab CI YAML file.
+        - Maven component image set to 'maven:3.8-openjdk-21'
+        - Maven job image set to 'maven:3.8-openjdk-21'
+        - Sonar scanner job image set to 'sonarsource/sonar-scanner-cli:latest'
+        The file is updated in-place.
+        """
+        template = self.parse_from_file(file_path)
+        data = template.get_data().copy()
+
+        # Update Maven component image
+        self._update_image_in_component_inputs(data, "maven", "maven:3.8-openjdk-21")
+
+        # Update Maven job image
+        self._update_image_in_jobs(data, "maven:3.8-openjdk-21")
+
+        # Update Sonar scanner CLI image in jobs
+        for key, value in data.items():
+            if isinstance(value, dict) and 'image' in value:
+                # Heuristic: job name or image contains 'sonar' or 'scanner'
+                job_name = key.lower()
+                image_val = value['image']
+                if ("sonar" in job_name or "scanner" in job_name or
+                    (isinstance(image_val, str) and "sonar" in image_val)):
+                    value['image'] = "sonarsource/sonar-scanner-cli:latest"
+                elif isinstance(image_val, dict) and 'name' in image_val and "sonar" in image_val['name']:
+                    image_val['name'] = "sonarsource/sonar-scanner-cli:latest"
+
+        updated_yaml = self.dump_to_string(GitLabTemplate(data, template.get_original_content()))
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(updated_yaml)
