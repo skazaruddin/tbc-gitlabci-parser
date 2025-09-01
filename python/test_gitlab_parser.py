@@ -3,7 +3,7 @@ Tests for GitLab CI/CD Template Parser Python implementation.
 """
 
 import pytest
-from gitlab_template_parser import GitLabTemplateParser, GitLabTemplate, GitLabParserOptions
+from gitlab_template_parser import GitLabTemplateParser
 
 
 class TestGitLabTemplateParser:

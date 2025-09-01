@@ -1,106 +1,44 @@
+
 """
-GitLab CI/CD Template Parser for Python using PyYAML with custom tag constructors.
+GitLab CI/CD Template Parser for Python using ruamel.yaml for round-trip formatting.
 Provides similar functionality to the Java implementation.
 """
 
-import yaml
+from ruamel.yaml import YAML
 from typing import Dict, List, Any, Optional, Union
 import logging
 
 logger = logging.getLogger(__name__)
 
-
-class GitLabYamlLoader(yaml.SafeLoader):
-    """Custom YAML loader that supports GitLab-specific tags like !reference and !include."""
-    
-    def __init__(self, stream):
-        super().__init__(stream)
-        # Register custom constructors for GitLab tags
-        GitLabYamlLoader.add_constructor('!reference', self._construct_gitlab_reference)
-        GitLabYamlLoader.add_constructor('!include', self._construct_gitlab_include)
-    
-    def _construct_gitlab_reference(self, loader, node):
-        """Constructor for !reference [anchor, property] tags."""
-        if not isinstance(node, yaml.SequenceNode):
-            raise yaml.constructor.ConstructorError(
-                None, None, "!reference must be followed by a sequence", node.start_mark
-            )
-        
-        values = loader.construct_sequence(node)
-        
-        if len(values) != 2:
-            raise yaml.constructor.ConstructorError(
-                None, None, "!reference must have exactly 2 elements: [anchor, property]", node.start_mark
-            )
-        
-        # Create a structured representation of the reference
-        return {
-            '__gitlab_reference': True,
-            'anchor': values[0],
-            'property': values[1]
-        }
-    
-    def _construct_gitlab_include(self, loader, node):
-        """Constructor for !include tags."""
-        if isinstance(node, yaml.ScalarNode):
-            value = loader.construct_scalar(node)
-        elif isinstance(node, yaml.SequenceNode):
-            value = loader.construct_sequence(node)
-        else:
-            value = loader.construct_mapping(node)
-        
-        # Create a structured representation of the include
-        return {
-            '__gitlab_include': True,
-            'value': value
-        }
-
-
 class GitLabParserOptions:
     """Configuration options for GitLab template parsing."""
-    
     def __init__(self, indent: int = 2, width: int = 120, preserve_quotes: bool = True):
         self.indent = indent
         self.width = width
         self.preserve_quotes = preserve_quotes
-    
     @classmethod
     def get_default(cls):
         return cls()
 
-
 class GitLabTemplate:
     """Represents a parsed GitLab CI/CD template with utility methods."""
-    
     def __init__(self, data: Dict[str, Any], original_content: Optional[str] = None):
         self.data = data
         self.original_content = original_content
-    
     def get_data(self) -> Dict[str, Any]:
-        """Get the template data as a dictionary."""
         return self.data
-    
     def get_original_content(self) -> Optional[str]:
-        """Get the original YAML content if available."""
         return self.original_content
-    
     def has_job(self, job_name: str) -> bool:
-        """Check if a job exists in the template."""
         return job_name in self.data and isinstance(self.data[job_name], dict)
-    
     def get_job(self, job_name: str) -> Optional[Dict[str, Any]]:
-        """Get a specific job configuration."""
         if self.has_job(job_name):
             return self.data[job_name]
         return None
-    
     def get_include(self) -> List[Any]:
-        """Get the include section."""
         include_data = self.data.get('include', [])
         return include_data if isinstance(include_data, list) else [include_data]
-    
     def has_tbc_components(self) -> bool:
-        """Check if template has To-Be-Continuous components."""
         includes = self.get_include()
         for item in includes:
             if isinstance(item, dict) and 'component' in item:
@@ -108,18 +46,14 @@ class GitLabTemplate:
                 if isinstance(component, str) and 'to-be-continuous' in component:
                     return True
         return False
-    
     def get_components_by_path(self, path: str) -> List[Dict[str, Any]]:
-        """Get TBC components that match a specific path."""
         components = []
         includes = self.get_include()
-        
         for item in includes:
             if isinstance(item, dict) and 'component' in item:
                 component = item['component']
                 if isinstance(component, str) and path in component:
                     components.append(item)
-        
         return components
     
     def get_variables(self) -> Dict[str, Any]:
@@ -150,7 +84,82 @@ class GitLabTemplate:
         return images
 
 
+    def parse_from_string(self, yaml_content: str) -> 'GitLabTemplate':
+        """Parse GitLab CI template from string content using ruamel.yaml RoundTripLoader for formatting preservation."""
+        if not yaml_content or not yaml_content.strip():
+            raise ValueError("YAML content cannot be null or empty")
+        from ruamel.yaml.constructor import ConstructorError
+        from ruamel.yaml.nodes import ScalarNode, SequenceNode, MappingNode
+        from ruamel.yaml import RoundTripLoader, add_constructor
+        yaml = YAML()
+        yaml.preserve_quotes = True
+        yaml.indent(mapping=self.options.indent, sequence=self.options.indent, offset=0)
+        yaml.width = self.options.width
+        def ref_constructor(loader, node):
+            if not isinstance(node, SequenceNode):
+                raise ConstructorError(None, None, "!reference must be followed by a sequence", node.start_mark)
+            values = loader.construct_sequence(node)
+            if len(values) != 2:
+                raise ConstructorError(None, None, "!reference must have exactly 2 elements: [anchor, property]", node.start_mark)
+            return {
+                '__gitlab_reference': True,
+                'anchor': values[0],
+                'property': values[1]
+            }
+        def include_constructor(loader, node):
+            if isinstance(node, ScalarNode):
+                value = loader.construct_scalar(node)
+            elif isinstance(node, SequenceNode):
+                value = loader.construct_sequence(node)
+            else:
+                value = loader.construct_mapping(node)
+            return {
+                '__gitlab_include': True,
+                'value': value
+            }
 class GitLabTemplateParser:
+    def __init__(self, options: Optional[GitLabParserOptions] = None):
+        self.options = options or GitLabParserOptions.get_default()
+
+    def parse_from_string(self, yaml_content: str) -> 'GitLabTemplate':
+        """Parse GitLab CI template from string content using ruamel.yaml RoundTripLoader for formatting preservation."""
+        if not yaml_content or not yaml_content.strip():
+            raise ValueError("YAML content cannot be null or empty")
+        from ruamel.yaml.constructor import ConstructorError
+        from ruamel.yaml.nodes import ScalarNode, SequenceNode, MappingNode
+        from ruamel.yaml import RoundTripLoader, add_constructor
+        yaml = YAML()
+        yaml.preserve_quotes = True
+        yaml.allow_unicode = True
+        yaml.allow_duplicate_keys = True
+        # yaml.indent(mapping=self.options.indent, sequence=self.options.indent, offset=0)
+        # yaml.width = self.options.width
+        def ref_constructor(loader, node):
+            if not isinstance(node, SequenceNode):
+                raise ConstructorError(None, None, "!reference must be followed by a sequence", node.start_mark)
+            values = loader.construct_sequence(node)
+            if len(values) != 2:
+                raise ConstructorError(None, None, "!reference must have exactly 2 elements: [anchor, property]", node.start_mark)
+            return {
+                '__gitlab_reference': True,
+                'anchor': values[0],
+                'property': values[1]
+            }
+        def include_constructor(loader, node):
+            if isinstance(node, ScalarNode):
+                value = loader.construct_scalar(node)
+            elif isinstance(node, SequenceNode):
+                value = loader.construct_sequence(node)
+            else:
+                value = loader.construct_mapping(node)
+            return {
+                '__gitlab_include': True,
+                'value': value
+            }
+        add_constructor('!reference', ref_constructor, Loader=RoundTripLoader)
+        add_constructor('!include', include_constructor, Loader=RoundTripLoader)
+        data = yaml.load(yaml_content)
+        return GitLabTemplate(data, yaml_content)
     def apply_changes_to_file(self, file_path: str, transform_fn=None):
         """
         Read a GitLab CI YAML file, apply changes, and write back to the file.
@@ -160,32 +169,17 @@ class GitLabTemplateParser:
         if transform_fn is None:
             transform_fn = self.apply_java21_upgrade
         updated_template = transform_fn(template)
-        updated_yaml = self.dump_to_string(updated_template)
+        yaml = YAML()
+        yaml.indent(mapping=self.options.indent, sequence=self.options.indent, offset=0)
+        yaml.width = self.options.width
         with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(updated_yaml)
+            yaml.dump(updated_template.get_data(), f)
     """Parser for GitLab CI/CD templates using PyYAML with custom constructors."""
     
     def __init__(self, options: Optional[GitLabParserOptions] = None):
         self.options = options or GitLabParserOptions.get_default()
     
-    def parse_from_string(self, yaml_content: str) -> GitLabTemplate:
-        """Parse GitLab CI template from string content."""
-        if not yaml_content or not yaml_content.strip():
-            raise ValueError("YAML content cannot be null or empty")
-        
-        try:
-            data = yaml.load(yaml_content, Loader=GitLabYamlLoader)
-            
-            if not isinstance(data, dict):
-                raise ValueError("Root YAML element must be a map/object")
-            
-            return GitLabTemplate(data, yaml_content)
-            
-        except yaml.YAMLError as e:
-            logger.error(f"Failed to parse GitLab CI template from string: {e}")
-            raise ValueError(f"Failed to parse YAML content: {e}") from e
-    
-    def parse_from_file(self, file_path: str) -> GitLabTemplate:
+    def parse_from_file(self, file_path: str) -> 'GitLabTemplate':
         """Parse GitLab CI template from file."""
         try:
             with open(file_path, 'r', encoding='utf-8') as file:
@@ -195,25 +189,8 @@ class GitLabTemplateParser:
             logger.error(f"Failed to read file {file_path}: {e}")
             raise ValueError(f"Failed to read file: {e}") from e
     
-    def dump_to_string(self, template: GitLabTemplate) -> str:
-        """Serialize GitLab CI template to YAML string."""
-        if template is None:
-            raise ValueError("GitLabTemplate cannot be null")
-        
-        try:
-            return yaml.dump(
-                template.get_data(),
-                default_flow_style=False,
-                indent=self.options.indent,
-                width=self.options.width,
-                allow_unicode=True,
-                sort_keys=False
-            )
-        except Exception as e:
-            logger.error(f"Failed to dump GitLab CI template to string: {e}")
-            raise ValueError(f"Failed to serialize template to YAML: {e}") from e
     
-    def update_image_in_section(self, template: GitLabTemplate, component_path: str, new_image: str) -> GitLabTemplate:
+    def update_image_in_section(self, template: 'GitLabTemplate', component_path: str, new_image: str) -> 'GitLabTemplate':
         """Update image tags in component inputs sections."""
         if template is None:
             raise ValueError("GitLabTemplate cannot be null")
@@ -323,6 +300,8 @@ class GitLabTemplateParser:
                 elif isinstance(image_val, dict) and 'name' in image_val and "sonar" in image_val['name']:
                     image_val['name'] = "sonarsource/sonar-scanner-cli:latest"
 
-        updated_yaml = self.dump_to_string(GitLabTemplate(data, template.get_original_content()))
+        yaml = YAML()
+        # yaml.indent(mapping=self.options.indent, sequence=self.options.indent, offset=0)
+        # yaml.width = self.options.width
         with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(updated_yaml)
+            yaml.dump(data, f)
